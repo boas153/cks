@@ -1,0 +1,410 @@
+apiVersion: "cilium.io/v2"
+kind: CiliumNetworkPolicy
+metadata:
+  name: "p2"
+  namespace: 
+spec:
+  endpointSelector:
+    matchLabels:
+      type: trasmitter
+  egressDeny:
+  - toEndpoints:
+      - matchLabels:
+          type: database
+
+    icmps:
+    - fields:
+      - type: 8
+        family: IPv4
+      - type: EchoRequest
+        family: IPv6
+--
+k -n team-orange exec transmitter-sxxxxx -- ping -w 2 10.244.2.13
+
+(3Q)  layer 3 name p3
+Mutual Authentication for outgoing traffic from Pods with label type=database to Pods with label type=messanger
+
+
+apiVersion: "cilium.io/v2"
+kind: CiliumNetworkPolicy
+metadata:
+  name: "p3"
+spec:
+  endpointSelector:
+    matchLabels:
+      type: database
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        type: messanger
+    authentication:
+      mode: "required"
+
+$ k -n team-orange get cnp
+
+Q9) AppArmor Profile
+1.add label security=apparmor
+$ k label node docker-desktop security=apparmor
+2. apparmor deploy 
+  - one replica of image nginx:1.27.1
+  - NodeSelector for security=apparmor
+  - Single Container named c1 with the AppArmor profile enabled only for this container
+
+
+$ kubectl create deployment apparmor --image=1.27.1
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: apparmor
+  name: apparmor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: apparmor
+  template:
+    metadata:
+      labels:
+        app: apparmor
+    spec:
+      containers:
+      - image: 1.27.1
+        name: c1
+        securityContext:
+          appArmorProfile:
+            type: Localhost
+            localhostProfile: very-secure
+      nodeSelector:
+        security: apparmor
+
+
+Q10) Container Runtime Sandbox gVisor
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  # The name the Runtimewill be referenced by.
+  # RuntimeClass is a non-namespaced resource.
+  name: gvisor
+# The name of the corresponding CRI configuration
+handler: runsc
+
+$ k run gvisor-test --image=nginx:1.27.1 --dry-run=client -o yaml > b.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    run: gvisor-test
+  name: gvisor-test
+  namespace: team-purple
+spec:
+  nodeName: cks7262-node2 # add
+  runtimeClassName: gvisor # add
+  containers:
+  - image: nginx:1.27.1
+    name: gvisor-test
+
+$ k -n team-purple exec gvisor-test > /opt/course/10/gvisor-test-dmesg -- dmesg
+
+
+Q11) database-access in namespace team-green
+
+1) get secrets
+$ cat /etc/kubernetes/manifest/kube-apiserver.yaml | grep etcd
+- -- etcd-cafile=/etc/kubernetes/pki/etcd/ca.crt
+- -- etcd-certfile=/tec/kubernetes/pki/apiserver-etcd-client.crt
+- -- etcd-keyfile=/etc/kubernetes/pki/apiserver0etcd-client.key
+- -- etcd-servers=https://127.0.0.0:2379 # optional since we're on same node
+
+ETCDCTL_API=3 etcdctl \
+   --cacert=/etc/kubernetes/pki/etcd/ca.crt   \
+   --cert=/etc/kubernetes/pki/etcd/server.crt \
+   --key=/etc/kubernetes/pki/etcd/server.key  \
+   get /registry/secrets/team-green/database-access
+
+{"pass":"Y29uZmlkZW50aWFs"},"kind":"Secret","metadata":{"annotations":{},"name":"database-access","namespace":"team-green"}}
+
+echo y29uZmlkZW50aWFs | base64 -d > /opt/course/11/database-password
+
+
+< Question 12 | Hack Secrets >
+$ k config use-context restricted@infra-prod
+$ k -n restricted get secret
+
+$ k -n restricted get pod -o yaml | grep -i secret 으로 시크릿 검색
+$ k -n restricted exec pod1-sadfasdf -- cat /etc/secret-volume/password
+you-are
+
+$ k -n restricted exec pod2-234234 -- env | grep PASS
+PASSWORD=an-amazing
+
+$ k -n restricted run test --image=nginx
+$ k -n restricted auth can-i create pods 
+
+$ k -n restricted exec -it pod3-asdfsad -- sh
+/ # mount | grep serviceaccount
+
+/ # ls /run/secrets/kubernetes.io/serviceaccount
+ca.crt namespace token
+
+(Q13) 메타데이터 접근 제한
+http://192.168.100.21:32000 메타데이터 서비스 가능
+(1) ns : metadata-access 에서 NP metadata-deny를 만들고 192.168.100.21의 egress 모든 파드의 나가는 트랙픽을 막는다. 나머지는 모두 가능하다.
+(2) ns : metadata-access 에서 np metadata-allow를 만들고 role: metadat-accessor pod -> 192.168.100.21에 접근 가능하도록 한다. 
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: metadata-deny
+  namespace: metadata-access
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 192.168.100.21/24
+
+---- ----
+검증 : curl -m 2 http://192.168.100.21:32000
+
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: metadata-allow 
+  namespace: metadata-access 
+spec:
+  podSelector:
+    matchLabels:
+      role: metadat-accessor 
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - ipBlock:
+        cidr: 192.168.100.21/32
+
+Question 14 | Syscall Activity
+
+ns : team-yellow에 kill을 호출하는 파드를 찾아 deployment를 0으로 줄여라.
+
+1) Find processes of Pod
+k -n team-yellow get pod -owide
+NAME                             ...       NODE               NOMINATED NODE   ...
+collector1-8d9dbc99f-hswfn       ...       cks7262-node1   <none>           <none>
+
+
+$ ssh cks7262-node1 
+$ crictl pods --name collector1
+POD ID              CREATED             STATE        NAME                         ...
+a61e29997e607       17 minutes ago      Ready        collector1-8d9dbc99f-kwjtf   ...
+
+
+$ crictl ps --pod a61e29997e607
+CONTAINER ID        IMAGE            ...    POD ID          POD
+e18e766d288ac       71136cb0add32    ...    a61e29997e607   collector1-8d9dbc99f-kwjtf
+
+
+$ crictl inspect e18e766d288ac | grep args -A1
+        "args": [
+          "./collector1-process"
+
+
+$ ps aux | grep collector1-process
+root       13980  0.0  0.0 702216   384 ?   ...    ./collector1-process
+root       14079  0.0  0.0 702216   512 ?   ...    ./collector1-process
+
+$ strace -p 14079 
+futex(0x4d7e68, FUTEX_WAIT_PRIVATE, 0, NULL) = 0
+kill(666, SIGTERM)                      = -1 ESRCH (No such process)
+futex(0x4d7e68, FUTEX_WAIT_PRIVATE, 0, NULL) = 0
+kill(666, SIGTERM)
+
+$ ps aux | grep collector2-process
+$ strace -p 
+
+$ k -n team-yellow scale deploy collector1 --replicas 0 
+
+< Question 15 | Configure TLS on Ingress >
+ns : team-pink ingress secure /app /api
+
+$ curl https://secure-ingress.test:31080/app
+$ curl -kv https://secure-ingress.test:31080/app
+
+Implement own TLS certificate
+
+k -n team-pink create secret tls tls-secret --key tls.key --cert tls.crt
+
+we configure the ingress to make use of this secret.
+$ k -n team-pink get ing secure -o yaml > 15_ing_bak.yaml 
+$ k -n team-pink edit ing secure 
+
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tls-example-ingress
+spec:
+  tls:          # add
+  - hosts:      # add
+      - secure-ingress.test # add
+    secretName: tls-secret # add
+  rules:
+  - host: https-example.foo.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: service1
+            port:
+              number: 80
+
+Question 16 | Docker image Attack Surface
+ns : team-blue -> image-verify deployment 
+
+# cks7262:/opt/course/16/image/Dockerfile
+FROM alpine:3.12
+RUN apk update && apk add vim nginx>=1.18.0
+RUN addgroup -S myuser && adduser -S myuser -G myuser
+COPY ./run.sh run.sh
+RUN ["chmod", "+x", "./run.sh"]
+USER myuser
+ENTRYPOINT ["/bin/sh", "./run.sh"]
+
+$ docker build -t registry.killer.sh:5000/image-verify:v2 .
+
+
+Question 17 | Audit Log Policy
+1) change the configuration so that only one backup of the logs is stored.
+2) Alter the Policy in a way that it only sotres logs:
+  1) From Secret resources, level Metadata
+  2) From "system:nodes" userGroups, level RequestResponse
+
+# cks3477/etc/kubernetes/manifests/kube-apiserver.yaml 
+apiVersion: v1
+kind: Pod
+metadata:
+  creationTimestamp: null
+  labels:
+    component: kube-apiserver
+    tier: control-plane
+  name: kube-apiserver
+  namespace: kube-system
+spec:
+  containers:
+  - command:
+    - kube-apiserver
+    - --audit-policy-file=/etc/kubernetes/audit/policy.yaml
+    - --audit-log-path=/etc/kubernetes/audit/logs/audit.log
+    - --audit-log-maxsize=5
+    - --audit-log-maxbackup=1                                    # CHANGE
+    - --advertise-address=192.168.100.21
+    - --allow-privileged=true
+
+$ vim /etc/kubernetes/audit/policy.yaml 
+apiVersion: audit.k8s.io/v1
+kind: Policy
+rules:
+- level: Metadata
+  resources:
+  - group: ""
+    resources: ["secrets"]
+
+- level: RequestResponse
+  userGroups: ["system:nodes"]
+
+- level: None
+
+once the apiserver is runnign again we can check the new logs and scroll through some entries:
+
+cat audit.log | grep '"resource":"secrets"' | wc -l
+
+< Question 18 | SBOM >
+
+$bom generate --image registry.k8s.io/kube-apiserver:v1.31.0 --format json --output /opt/course/18/sbom1.json
+
+$trivy image registry.k8s.io/kube-apiserver:v1.31.0
+$trivy image trhidyty.k8d.io/kube-apiserver:v1.31.0 --format CycloneDX --output result.cdx alpine:3.15 
+$trivy sbom --format json /opt/course/18/sbom_check.json 
+
+Question 19 | Immutable Root FileSystem
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: immutable-deployment
+  template:
+    metadata:
+      labels:
+        app: immutable-deployment
+    spec:
+      containers:
+      - image: busybox:1.32.0
+        command: ['sh', '-c', 'tail -f /dev/null']
+        imagePullPolicy: IfNotPresent
+        securityContexts: 
+          readOnlyRootFilesystem: true
+        name: busybox
+        volumeMounts:
+        - mountPath: /tmp
+          name: temp-vol
+      volumes:
+        - name: temp-vol
+          emptyDir: {}
+
+Q.20 | Update kubernetes
+---- Control Plane Components ----
+$ sudo apt update
+$ sudo apt-cache madison kubeadm
+$ kubeadm version 
+$ kubeadm upgrade plan
+$ kubeadm upgrade apply v1.32.x
+
+$ apt show kubelet | grep 1.32.1
+
+$ sudo apt-mark unhold kubelet kubectl && \
+$ sudo apt-get update && sudo apt-get install -y kubelet='1.32.x-*' kubectl='1.32.x-*' && \
+$ sudo apt-mark hold kubelet kubectl
+
+
+Q.21 Image Vulnerability Scanning
+$ trivy image nginx:1.16.1-alpine | grep -E 'CVE-2020-10878 | CVE-2020-1967'
+
+
+Q.22 | Manual static security analysis
+secret-token을 복사하는 것은 이미지 레이어에 영구 저장된다. 그래서 이것은 위험하다. 
+COPY secret-token .
+
+echo로 시크릿 정보를 남기는 것은 위험하다. 
+echo $SECRET_USERNAME && echo ${SECRET_PASSWORD} && docker-entrypoint.sh" ## NOT GOOD
+
+password가 출력되는 나쁘다.
+- name: Password
+  value: Mysdfs@#
+
+Q.23 | ImagePolicyWebhook
+< imagePolicyWebhook Backend는 존재한다. >
+1.Create an AdmissionConfiguration at /opt/course/23/webhook/admission-config.yaml which contains the follwing ImagePoicyWebhook configuration in the same file
+
+2.Configure the apiserver to: 
+  Mount /opt/course/23/webhook at /etc/kubernetes/webhook
+  Use the AdmissionConfiguration at path /etc/kubernetes/webhook/admission-config.yaml 
+
+kube-apiserver.yaml
+
+
+-- enable-admission-plugins=NodeRestiction,ImagePolicyWebhook #
+-- admission-control-config-file=/etc/kubernetes/webhook/admission-config.yaml # 
+
+
+
+
+
+
+
