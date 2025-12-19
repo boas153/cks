@@ -1,0 +1,86 @@
+[ Question 1 Contexts ]
+$ k config get-contexts -o name > /opt/course/1/contexts
+$ k config view --raw
+And copy it manually.
+
+
+[ Question 2 Image Vulnerability Scanning ]
+$ trivy image nginx:1.16.1-alpine | grep -E 'CVE-2020-10878|CVE-2020-1967'
+
+
+[ Question 3 Apiserver Security ]
+$ vim /etc/kubernetes/manifests/kube-apiserver.yaml
+..
+# - --kubernetes-service-node-port=31000 # delete or set to 0 
+..
+$ k delete svc kubernetes
+$ k get svc 
+
+
+[ Question 4 ServiceAccount Token Expiration ]
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stream-multiplex
+  namespace: team-coral
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      id: stream-multiplex
+  template:
+    metadata:
+      labels:
+        id: stream-multiplex
+      annotations:              # Changes
+        token-lifetime: "1200"  # Changes
+    spec:
+      serviceAccountName: stream-multiplex  # Changes
+      automountServiceAccountToken: false   # Changes
+      containers:
+        - image: httpd:2-alpine
+          name: httpd
+          resources:
+            requests:
+              cpu: 20m
+              memory: 20Mi
+          volumeMounts:
+            - name: token-volume
+              mountPath: /var/run/secrets/custom
+              readOnly: true
+      volumes:
+        - name: token-volume
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 1200
+
+
+[ Question 5 | CIS Benchmark ]
+$ kube-bench run --targets=master
+$ kube-bench run --targets=master | grep kube-controller -A 3
+1.3.2 Edit the Controller manager pod specification file /etc/kubernetes/manifests/kube-controller-manager.yaml
+...
+--profiling=false
+$ kube-bench run --targets=master --check='1.3.2'
+...
+[FAIL] 1.3.2 Ensure that the --profiling argument is set to false
+$ vim /etc/kubernetes/manifests/kube-controler-manager.yaml
+...
+- --profiling=false   # add
+
+$ kube-bench run --targets=master | grep "/var/lib/etcd" -B5
+...
+1.1.12 on the etcd server node, get the etcd data directory, passed as an argument --data-dir,
+from the command 'ps -ef | grep etcd'.
+Run the below command (based on the etcd data directory found above).
+For example, chown etcd:etcd /var/lib/etcd
+
+$ kube-bench run --targets=master | grep 1.1.12
+$ chown etcd:etcd /var/lib/etcd
+
+$ ssh cks7262-node1
+$ kube-bench run --targets=node
+
+

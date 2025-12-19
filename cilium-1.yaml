@@ -398,13 +398,7 @@ Q.23 | ImagePolicyWebhook
 
 kube-apiserver.yaml
 
-
 -- enable-admission-plugins=NodeRestiction,ImagePolicyWebhook #
 -- admission-control-config-file=/etc/kubernetes/webhook/admission-config.yaml # 
-
-
-
-
-
 
 

@@ -1,0 +1,15 @@
+<Question 15> Configire TLS on Ingress
+
+k -n team-pink create secret tls tls-secret --key tls.key --cert tls.crt
+secret/tls-secret created
+
+k -n team-pink edit ing secure
+
+apiVersion: 
+..
+
+spec:
+  tls:                        # add
+    - hosts:                  # add
+      - secure-ingress.test   # add
+      secretName: tls-secret  # add
